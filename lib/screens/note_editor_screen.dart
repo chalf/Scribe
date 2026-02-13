@@ -117,11 +117,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
         final savedImage = File('${imagesDir.path}/$fileName');
         await File(image.path).copy(savedImage.path);
         
-        // Insert image embed into document
+        // Insert image embed with path and width as JSON
         final index = _quillController.selection.baseOffset;
+        final imageData = jsonEncode({
+          'path': savedImage.path,
+          'width': 300.0,
+        });
         _quillController.document.insert(
           index,
-          quill.BlockEmbed.image(savedImage.path),
+          quill.BlockEmbed.image(imageData),
         );
         
         // Move cursor after image
@@ -250,7 +254,8 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.description),
-              title: const Text('Xuất file Word (RTF)'),
+              title: const Text('Xuất file Word (với hình ảnh)'),
+              subtitle: const Text('Định dạng HTML, mở bằng Word'),
               onTap: () {
                 Navigator.pop(context);
                 _exportAsDocx();
@@ -403,9 +408,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
               style: const TextStyle(
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
+                color: Colors.white,
               ),
               decoration: const InputDecoration(
                 hintText: 'Tiêu đề',
+                hintStyle: TextStyle(color: Colors.white54),
                 border: InputBorder.none,
               ),
               textInputAction: TextInputAction.next,
@@ -419,7 +426,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           
           // Custom formatting toolbar
           Container(
-            color: Colors.grey[100],
+            color: const Color(0xFF2E2E2E),
             padding: const EdgeInsets.symmetric(vertical: 4),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -519,6 +526,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 }
               },
               child: Container(
+                color: Colors.black,
                 padding: const EdgeInsets.all(16.0),
                 child: quill.QuillEditor.basic(
                   configurations: quill.QuillEditorConfigurations(
@@ -529,6 +537,28 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     autoFocus: true,
                     expands: false,
                     showCursor: true,
+                    customStyles: quill.DefaultStyles(
+                      paragraph: quill.DefaultTextBlockStyle(
+                        const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white,
+                          height: 1.5,
+                        ),
+                        const quill.VerticalSpacing(0, 0),
+                        const quill.VerticalSpacing(0, 0),
+                        null,
+                      ),
+                      placeHolder: quill.DefaultTextBlockStyle(
+                        const TextStyle(
+                          fontSize: 16,
+                          color: Colors.white38,
+                          height: 1.5,
+                        ),
+                        const quill.VerticalSpacing(0, 0),
+                        const quill.VerticalSpacing(0, 0),
+                        null,
+                      ),
+                    ),
                     embedBuilders: [
                       ResizableImageEmbedBuilder(),
                     ],
@@ -672,10 +702,32 @@ class ResizableImageEmbedBuilder extends quill.EmbedBuilder {
     bool inline,
     TextStyle textStyle,
   ) {
-    final imageUrl = node.value.data;
+    try {
+      // Try to parse as JSON with path and width
+      final data = jsonDecode(node.value.data);
+      if (data is Map && data.containsKey('path')) {
+        final imageUrl = data['path'] as String;
+        final width = (data['width'] ?? 300.0).toDouble();
+        
+        return ResizableImageWidget(
+          imageUrl: imageUrl,
+          initialWidth: width,
+          readOnly: readOnly,
+          controller: controller,
+          embedData: node.value.data,
+        );
+      }
+    } catch (e) {
+      // Not JSON, treat as plain path
+    }
+    
+    // Fallback: treat as plain image path (old format)
     return ResizableImageWidget(
-      imageUrl: imageUrl,
+      imageUrl: node.value.data,
+      initialWidth: 300.0,
       readOnly: readOnly,
+      controller: controller,
+      embedData: node.value.data,
     );
   }
 }
@@ -683,12 +735,18 @@ class ResizableImageEmbedBuilder extends quill.EmbedBuilder {
 // Stateful widget for resizable image
 class ResizableImageWidget extends StatefulWidget {
   final String imageUrl;
+  final double initialWidth;
   final bool readOnly;
+  final quill.QuillController? controller;
+  final String embedData; // Store the original embed data for finding it
 
   const ResizableImageWidget({
     Key? key,
     required this.imageUrl,
+    this.initialWidth = 300.0,
     this.readOnly = false,
+    this.controller,
+    required this.embedData,
   }) : super(key: key);
 
   @override
@@ -696,8 +754,49 @@ class ResizableImageWidget extends StatefulWidget {
 }
 
 class _ResizableImageWidgetState extends State<ResizableImageWidget> {
-  double _width = 300.0;
-  double _initialWidth = 300.0;
+  late double _width;
+  late double _scaleStartWidth;
+
+  @override
+  void initState() {
+    super.initState();
+    _width = widget.initialWidth;
+    _scaleStartWidth = _width;
+  }
+
+  void _updateImageWidthInDocument(double newWidth) {
+    if (widget.controller == null || widget.readOnly) return;
+    
+    final doc = widget.controller!.document;
+    int offset = 0;
+    
+    // Traverse document to find this embed and update it
+    for (var node in doc.root.children) {
+      if (node is quill.Line) {
+        for (var leaf in node.children) {
+          if (leaf is quill.Embed && leaf.value.type == 'image') {
+            // Check if this is our image by comparing the embed data
+            if (leaf.value.data == widget.embedData) {
+              // Found our image! Update its width
+              doc.delete(offset, 1);
+              
+              final newImageData = jsonEncode({
+                'path': widget.imageUrl,
+                'width': newWidth,
+              });
+              
+              doc.insert(
+                offset,
+                quill.BlockEmbed.image(newImageData),
+              );
+              return;
+            }
+          }
+          offset += leaf.length;
+        }
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -723,12 +822,16 @@ class _ResizableImageWidgetState extends State<ResizableImageWidget> {
         children: [
           GestureDetector(
             onScaleStart: (details) {
-              _initialWidth = _width;
+              _scaleStartWidth = _width;
             },
             onScaleUpdate: (details) {
               setState(() {
-                _width = (_initialWidth * details.scale).clamp(100.0, 600.0);
+                _width = (_scaleStartWidth * details.scale).clamp(100.0, 600.0);
               });
+            },
+            onScaleEnd: (details) {
+              // Save width when user finishes pinch gesture
+              _updateImageWidthInDocument(_width);
             },
             child: Container(
               width: _width,
@@ -776,6 +879,10 @@ class _ResizableImageWidgetState extends State<ResizableImageWidget> {
                 setState(() {
                   _width = value;
                 });
+              },
+              onChangeEnd: (value) {
+                // Save width when user finishes sliding
+                _updateImageWidthInDocument(value);
               },
             ),
         ],
