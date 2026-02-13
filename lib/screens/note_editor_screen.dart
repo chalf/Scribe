@@ -408,6 +408,11 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 hintText: 'Tiêu đề',
                 border: InputBorder.none,
               ),
+              textInputAction: TextInputAction.next,
+              onSubmitted: (_) {
+                // Move focus to editor when user presses Done/Enter
+                _editorFocusNode.requestFocus();
+              },
             ),
           ),
           const Divider(height: 1),
@@ -439,6 +444,27 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                     icon: const Icon(Icons.format_strikethrough),
                     onPressed: () => _applyFormat(quill.Attribute.strikeThrough),
                     tooltip: 'Gạch ngang',
+                  ),
+                  const VerticalDivider(),
+                  IconButton(
+                    icon: const Icon(Icons.undo),
+                    onPressed: _quillController.hasUndo
+                        ? () {
+                            _quillController.undo();
+                            setState(() {}); // Refresh button states
+                          }
+                        : null,
+                    tooltip: 'Hoàn tác (Ctrl+Z)',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.redo),
+                    onPressed: _quillController.hasRedo
+                        ? () {
+                            _quillController.redo();
+                            setState(() {}); // Refresh button states
+                          }
+                        : null,
+                    tooltip: 'Làm lại (Ctrl+Y)',
                   ),
                   const VerticalDivider(),
                   IconButton(
@@ -485,19 +511,28 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
           
           // Editor
           Expanded(
-            child: Container(
-              padding: const EdgeInsets.all(16.0),
-              child: quill.QuillEditor.basic(
-                configurations: quill.QuillEditorConfigurations(
-                  controller: _quillController,
-                  placeholder: 'Bắt đầu viết...',
-                  padding: EdgeInsets.zero,
-                  scrollable: true,
-                  autoFocus: false,
-                  expands: false,
-                  embedBuilders: [
-                    ResizableImageEmbedBuilder(),
-                  ],
+            child: GestureDetector(
+              onTap: () {
+                // Request focus when tapping on editor area
+                if (!_editorFocusNode.hasFocus) {
+                  _editorFocusNode.requestFocus();
+                }
+              },
+              child: Container(
+                padding: const EdgeInsets.all(16.0),
+                child: quill.QuillEditor.basic(
+                  configurations: quill.QuillEditorConfigurations(
+                    controller: _quillController,
+                    placeholder: 'Bắt đầu viết...',
+                    padding: EdgeInsets.zero,
+                    scrollable: true,
+                    autoFocus: true,
+                    expands: false,
+                    showCursor: true,
+                    embedBuilders: [
+                      ResizableImageEmbedBuilder(),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -510,6 +545,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void _showColorPicker(bool isBackground) {
     final colors = [
       Colors.black,
+      Colors.white,
       Colors.red,
       Colors.blue,
       Colors.green,
@@ -531,7 +567,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
               onTap: () {
                 final colorHex = '#${color.value.toRadixString(16).substring(2)}';
                 if (isBackground) {
-                  final attr = quill.Attribute.fromKeyValue('bg', colorHex);
+                  final attr = quill.Attribute.fromKeyValue('background', colorHex);
                   if (attr != null) _applyFormat(attr);
                 } else {
                   final attr = quill.Attribute.fromKeyValue('color', colorHex);
@@ -544,7 +580,10 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
                 height: 40,
                 decoration: BoxDecoration(
                   color: color,
-                  border: Border.all(color: Colors.grey),
+                  border: Border.all(
+                    color: color == Colors.white ? Colors.grey.shade600 : Colors.grey,
+                    width: color == Colors.white ? 2 : 1,
+                  ),
                   borderRadius: BorderRadius.circular(4),
                 ),
               ),
@@ -556,62 +595,55 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   }
 
   void _showFontSizePicker() {
-    final sizes = [
-      {'label': 'Rất nhỏ', 'value': '8'},
-      {'label': 'Nhỏ', 'value': '12'},
-      {'label': 'Bình thường', 'value': '15'}, // Clear size attribute
-      {'label': 'Lớn', 'value': '18'},
-      {'label': 'Rất lớn', 'value': '22'},
-      {'label': 'Khổng lồ', 'value': '28'},
-    ];
+    // Generate list of font sizes from 8 to 72
+    final sizes = List.generate(65, (index) => 8 + index);
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Chọn kích thước chữ'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: sizes.map((size) {
-            return ListTile(
-              title: Text(
-                size['label'].toString(),
-                style: TextStyle(
-                  fontSize: _getSizePreview(size['value']?.toString()),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: ListView.builder(
+            itemCount: sizes.length,
+            itemBuilder: (context, index) {
+              final size = sizes[index];
+              return ListTile(
+                title: Text(
+                  '$size',
+                  style: TextStyle(
+                    fontSize: size.toDouble().clamp(10.0, 32.0), // Preview with clamped size
+                    fontWeight: FontWeight.w500,
+                  ),
                 ),
-              ),
-              onTap: () {
-                final sizeValue = size['value']?.toString();
-                if (sizeValue == null) {
-                  // Clear size formatting
-                  _quillController.formatSelection(quill.Attribute.clone(quill.Attribute.size, null));
-                } else {
-                  final attr = quill.Attribute.fromKeyValue('size', sizeValue);
+                trailing: Text(
+                  'Aa',
+                  style: TextStyle(
+                    fontSize: size.toDouble().clamp(10.0, 32.0),
+                  ),
+                ),
+                onTap: () {
+                  final attr = quill.Attribute.fromKeyValue('size', size.toString());
                   if (attr != null) _applyFormat(attr);
-                }
-                Navigator.pop(context);
-              },
-            );
-          }).toList(),
+                  Navigator.pop(context);
+                },
+              );
+            },
+          ),
         ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              // Clear size formatting
+              _quillController.formatSelection(quill.Attribute.clone(quill.Attribute.size, null));
+              Navigator.pop(context);
+            },
+            child: const Text('Xóa định dạng'),
+          ),
+        ],
       ),
     );
-  }
-
-  double _getSizePreview(String? size) {
-    switch (size) {
-      case 'small':
-        return 12.0;
-      case '12':
-        return 12.0;
-      case '18':
-        return 18.0;
-      case 'large':
-        return 20.0;
-      case 'huge':
-        return 24.0;
-      default:
-        return 16.0;
-    }
   }
 
   @override
